@@ -1,0 +1,117 @@
+name: novashop-microservices
+services:
+  product-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: products
+      POSTGRES_USER: ${DB_USER:-novashop}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-novashop_dev_password}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+    volumes:
+      - product_data:/var/lib/postgresql/data
+    networks:
+      - novashop-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  order-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: ${DB_USER:-novashop}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-novashop_dev_password}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8
+    volumes:
+      - order_data:/var/lib/postgresql/data
+    networks:
+      - novashop-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  product-service:
+    build: ./product-service
+    environment:
+      PORT: 3001
+      DB_HOST: product-db
+      DB_PORT: 5432
+      DB_NAME: products
+      DB_USER: ${DB_USER:-novashop}
+      DB_PASSWORD: ${DB_PASSWORD:-novashop_dev_password}
+      ORDER_SERVICE_URL: http://order-service:3002
+    expose:
+      - "3001"
+    networks:
+      - novashop-net
+    depends_on:
+      product-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  order-service:
+    build: ./order-service
+    environment:
+      PORT: 3002
+      DB_HOST: order-db
+      DB_PORT: 5432
+      DB_NAME: orders
+      DB_USER: ${DB_USER:-novashop}
+      DB_PASSWORD: ${DB_PASSWORD:-novashop_dev_password}
+      PRODUCT_SERVICE_URL: http://product-service:3001
+    expose:
+      - "3002"
+    networks:
+      - novashop-net
+    depends_on:
+      order-db:
+        condition: service_healthy
+      product-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  gateway:
+    build: ./gateway
+    environment:
+      PORT: 8080
+      PRODUCT_SERVICE_URL: http://product-service:3001
+      ORDER_SERVICE_URL: http://order-service:3002
+    ports:
+      - "${GATEWAY_HOST_PORT:-8080}:8080"
+    networks:
+      - novashop-net
+    depends_on:
+      product-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+networks:
+  novashop-net:
+    driver: bridge
+
+volumes:
+  product_data:
+  order_data:
